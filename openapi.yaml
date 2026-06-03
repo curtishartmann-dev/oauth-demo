@@ -1,0 +1,634 @@
+openapi: 3.0.3
+
+info:
+  title: OAuth 2.0 Demo Server
+  description: |
+    A minimal but complete OAuth 2.0 Authorization Server for testing consumer applications.
+
+    ## Authentication
+
+    This server implements the **Authorization Code** flow (RFC 6749 §4.1), with optional
+    PKCE (RFC 7636). After completing the flow, include the returned JWT as a
+    `Bearer` token on all protected endpoints.
+
+    ### Quick Start
+
+    1. Redirect the user to `/oauth/authorize` with `response_type=code`
+    2. Handle the callback — your app receives `?code=<code>&state=<state>`
+    3. `POST /oauth/token` to exchange the code for an access token
+    4. Call `/api/data` or `/api/me` with `Authorization: Bearer <access_token>`
+
+    ### Demo Credentials
+
+    | Client ID | Client Secret |
+    |-----------|---------------|
+    | `demo-client-id` | `demo-client-secret` |
+
+    | Username | Password | Role |
+    |----------|----------|------|
+    | alice | password123 | admin |
+    | bob | password123 | user |
+
+  version: "1.0.0"
+  contact:
+    name: OAuth Demo
+  license:
+    name: MIT
+
+servers:
+  - url: https://your-service.onrender.com
+    description: Production (Render)
+  - url: http://localhost:3000
+    description: Local development
+
+# ── Security scheme definitions ────────────────────────────────────────────
+components:
+
+  securitySchemes:
+
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from `POST /oauth/token`
+
+    OAuth2AuthCode:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: /oauth/authorize
+          tokenUrl: /oauth/token
+          refreshUrl: /oauth/token
+          scopes:
+            openid:    Confirm identity
+            profile:   Read name and basic profile
+            email:     Read email address
+            api:read:  Read access to /api/data
+            api:write: Write access to /api/data
+
+  # ── Reusable schemas ───────────────────────────────────────────────────
+  schemas:
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        token_type:
+          type: string
+          enum: [Bearer]
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Lifetime of the access token in seconds
+          example: 3600
+        refresh_token:
+          type: string
+          description: Opaque token used to obtain a new access token
+          example: 550e8400-e29b-41d4-a716-446655440000
+        scope:
+          type: string
+          description: Space-separated list of granted scopes
+          example: openid profile api:read
+
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: RFC 6749 error code
+          enum:
+            - invalid_request
+            - invalid_client
+            - invalid_grant
+            - unauthorized_client
+            - unsupported_grant_type
+            - invalid_scope
+            - invalid_token
+            - insufficient_scope
+            - access_denied
+        error_description:
+          type: string
+          description: Human-readable explanation
+          example: Code expired or not found
+
+    IntrospectionResponse:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+          description: Whether the token is currently valid
+        sub:
+          type: string
+          description: Subject — the authenticated user ID
+          example: alice
+        scope:
+          type: string
+          example: openid profile api:read
+        client_id:
+          type: string
+          example: demo-client-id
+        exp:
+          type: integer
+          description: Expiry time (Unix timestamp)
+          example: 1718000000
+        iat:
+          type: integer
+          description: Issued-at time (Unix timestamp)
+          example: 1717996400
+
+    UserInfo:
+      type: object
+      properties:
+        sub:
+          type: string
+          description: User identifier
+          example: alice
+        name:
+          type: string
+          example: Alice Demo
+        email:
+          type: string
+          format: email
+          example: alice@demo.com
+        role:
+          type: string
+          enum: [admin, user]
+          example: admin
+        client_id:
+          type: string
+          example: demo-client-id
+        scope:
+          type: string
+          example: openid profile api:read
+
+    DataItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Widget Alpha
+        status:
+          type: string
+          enum: [active, inactive, pending]
+          example: active
+        value:
+          type: integer
+          example: 1200
+
+    DataListResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: You successfully called a protected endpoint!
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-06-03T14:30:00.000Z"
+        user:
+          type: string
+          example: alice
+        scope:
+          type: string
+          example: openid profile api:read
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DataItem"
+
+    DataCreateRequest:
+      type: object
+      description: Arbitrary JSON body — nothing is actually persisted
+      additionalProperties: true
+      example:
+        name: New Widget
+        category: hardware
+        value: 999
+
+    DataCreateResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Resource created (demo — nothing actually persisted)
+        received:
+          type: object
+          additionalProperties: true
+          description: Echo of the request body
+        id:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        timestamp:
+          type: string
+          format: date-time
+        user:
+          type: string
+          example: alice
+
+    DiscoveryMetadata:
+      type: object
+      properties:
+        issuer:
+          type: string
+          format: uri
+          example: https://your-service.onrender.com
+        authorization_endpoint:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        userinfo_endpoint:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+        response_types_supported:
+          type: array
+          items:
+            type: string
+          example: [code]
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+          example: [authorization_code, refresh_token]
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+          example: [client_secret_post, client_secret_basic]
+        scopes_supported:
+          type: array
+          items:
+            type: string
+          example: [openid, profile, email, "api:read", "api:write"]
+
+  # ── Reusable responses ─────────────────────────────────────────────────
+  responses:
+
+    Unauthorized:
+      description: Missing or invalid Bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OAuthError"
+          example:
+            error: invalid_token
+            error_description: jwt expired
+
+    OAuthErrorResponse:
+      description: OAuth protocol error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OAuthError"
+
+# ══════════════════════════════════════════════════════════════════════════
+# PATHS
+# ══════════════════════════════════════════════════════════════════════════
+paths:
+
+  # ── Discovery ────────────────────────────────────────────────────────────
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [Discovery]
+      summary: Authorization server metadata
+      description: |
+        Returns OAuth 2.0 Authorization Server Metadata per RFC 8414.
+        Most OAuth client libraries will auto-configure from this endpoint.
+      operationId: getDiscoveryMetadata
+      responses:
+        "200":
+          description: Server metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscoveryMetadata"
+
+  # ── Authorization endpoint ───────────────────────────────────────────────
+  /oauth/authorize:
+    get:
+      tags: [OAuth 2.0]
+      summary: Authorization endpoint
+      description: |
+        Initiates the Authorization Code flow. Renders an HTML login form.
+        The user authenticates and approves the requested scopes, then is
+        redirected to `redirect_uri` with an authorization `code`.
+
+        **PKCE:** include `code_challenge` and `code_challenge_method=S256`
+        to enable PKCE (required for public clients).
+      operationId: authorize
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+          example: code
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+          example: demo-client-id
+        - name: redirect_uri
+          in: query
+          required: false
+          description: Must match a registered URI for the client. Defaults to the first registered URI.
+          schema:
+            type: string
+            format: uri
+          example: http://localhost:8080/callback
+        - name: scope
+          in: query
+          required: false
+          description: Space-separated list of requested scopes
+          schema:
+            type: string
+            default: openid profile
+          example: openid profile api:read
+        - name: state
+          in: query
+          required: false
+          description: Opaque value used to maintain state between request and callback. Strongly recommended.
+          schema:
+            type: string
+          example: xK9mZ2pQ
+        - name: code_challenge
+          in: query
+          required: false
+          description: PKCE — BASE64URL(SHA256(code_verifier))
+          schema:
+            type: string
+        - name: code_challenge_method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [S256]
+      responses:
+        "200":
+          description: HTML login and consent form
+          content:
+            text/html:
+              schema:
+                type: string
+        "302":
+          description: |
+            Redirect to `redirect_uri` after user action.
+            - **Success:** `?code=<code>&state=<state>`
+            - **Denied:** `?error=access_denied&state=<state>`
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        "400":
+          description: Invalid client_id, response_type, or redirect_uri
+          content:
+            text/html:
+              schema:
+                type: string
+
+  # ── Token endpoint ───────────────────────────────────────────────────────
+  /oauth/token:
+    post:
+      tags: [OAuth 2.0]
+      summary: Token endpoint
+      description: |
+        Exchange an authorization code for tokens, or refresh an access token.
+
+        **Client authentication** — supply credentials via either:
+        - Request body fields: `client_id` + `client_secret`
+        - HTTP Basic auth: `Authorization: Basic BASE64(client_id:client_secret)`
+      operationId: token
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code, refresh_token]
+                  description: The OAuth 2.0 grant type
+                code:
+                  type: string
+                  description: Required for `authorization_code` grant
+                redirect_uri:
+                  type: string
+                  format: uri
+                  description: Must match the URI used in `/oauth/authorize`
+                refresh_token:
+                  type: string
+                  description: Required for `refresh_token` grant
+                client_id:
+                  type: string
+                  description: Required unless using Basic auth
+                  example: demo-client-id
+                client_secret:
+                  type: string
+                  description: Required unless using Basic auth
+                  example: demo-client-secret
+                code_verifier:
+                  type: string
+                  description: PKCE verifier — required if a code_challenge was sent to /oauth/authorize
+            examples:
+              authorization_code:
+                summary: Exchange authorization code
+                value:
+                  grant_type: authorization_code
+                  code: 550e8400-e29b-41d4-a716-446655440000
+                  redirect_uri: http://localhost:8080/callback
+                  client_id: demo-client-id
+                  client_secret: demo-client-secret
+              refresh_token:
+                summary: Refresh access token
+                value:
+                  grant_type: refresh_token
+                  refresh_token: 550e8400-e29b-41d4-a716-446655440001
+                  client_id: demo-client-id
+                  client_secret: demo-client-secret
+      responses:
+        "200":
+          description: Token issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/OAuthErrorResponse"
+        "401":
+          description: Client authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthError"
+              example:
+                error: invalid_client
+
+  # ── Introspection ────────────────────────────────────────────────────────
+  /oauth/introspect:
+    post:
+      tags: [OAuth 2.0]
+      summary: Token introspection (RFC 7662)
+      description: |
+        Check whether a token is currently active and retrieve its metadata.
+        Returns `{ "active": false }` for any invalid or expired token.
+      operationId: introspect
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: The token to introspect
+      responses:
+        "200":
+          description: Introspection result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntrospectionResponse"
+              examples:
+                active:
+                  summary: Active token
+                  value:
+                    active: true
+                    sub: alice
+                    scope: openid profile api:read
+                    client_id: demo-client-id
+                    exp: 1718000000
+                    iat: 1717996400
+                inactive:
+                  summary: Expired or unknown token
+                  value:
+                    active: false
+
+  # ── Revocation ───────────────────────────────────────────────────────────
+  /oauth/revoke:
+    post:
+      tags: [OAuth 2.0]
+      summary: Token revocation (RFC 7009)
+      description: |
+        Revoke a refresh token. Always returns 200 regardless of whether
+        the token existed (per RFC 7009 §2.2).
+      operationId: revoke
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: The refresh token to revoke
+      responses:
+        "200":
+          description: Token revoked (or did not exist)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Token revoked (if it existed)
+
+  # ── Protected: User Info ─────────────────────────────────────────────────
+  /api/me:
+    get:
+      tags: [Protected API]
+      summary: Current user profile
+      description: Returns profile information for the authenticated user.
+      operationId: getMe
+      security:
+        - BearerAuth: []
+        - OAuth2AuthCode: [openid, profile]
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Protected: Data resource ─────────────────────────────────────────────
+  /api/data:
+    get:
+      tags: [Protected API]
+      summary: List dummy resources
+      description: |
+        Returns a static list of demo items. Requires a valid Bearer token.
+        This endpoint confirms that your OAuth integration is working end-to-end.
+      operationId: getData
+      security:
+        - BearerAuth: []
+        - OAuth2AuthCode: ["api:read"]
+      responses:
+        "200":
+          description: List of dummy data items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Protected API]
+      summary: Create a dummy resource
+      description: |
+        Accepts any JSON body and echoes it back with a generated ID.
+        Nothing is actually persisted — this is a demo endpoint.
+      operationId: createData
+      security:
+        - BearerAuth: []
+        - OAuth2AuthCode: ["api:write"]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DataCreateRequest"
+      responses:
+        "201":
+          description: Resource created (demo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataCreateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+# ── Tag descriptions ────────────────────────────────────────────────────────
+tags:
+  - name: Discovery
+    description: Server metadata and configuration
+  - name: OAuth 2.0
+    description: Authorization, token issuance, introspection, and revocation
+  - name: Protected API
+    description: Endpoints that require a valid Bearer token
